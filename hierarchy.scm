@@ -2,57 +2,70 @@
 ;; - what about those language filters??
 ;; - or get all properties??
 
-(use awful)
+(use awful srfi-69)
 
 (load "sparql.scm")
 (load "rdf.scm")
 (load "rest.scm")
 
-(*default-graph* "http://data.europa.eu/eurostat/ECOICOP")
+(development-mode? #t)
+(debug-file "./debug.log")
+(*print-queries?* #f)
 
-(*sparql-endpoint* "http://172.31.63.185:8890/sparql?")
+(*default-graph* (or (get-environment-variable "MU_DEFAULT_GRAPH")
+                     "http://data.europa.eu/eurostat/ECOICOP"))
+
+(*sparql-endpoint* (or (get-environment-variable "SPARQL_ENDPOINT")
+                       "http://172.31.63.185:8890/sparql?"))
 
 (define-namespace taxonomy "http://data.europa.eu/eurostat/id/taxonomy/")
 
-(define-namespace ecoicop "http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/")
-
 (define-namespace skos "http://www.w3.org/2004/02/skos/core#")
 
-(development-mode? #t)
 
-(debug-file "./debug.log")
+(define node-namespace (or "http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/"))
 
-;; (get-environment-variable "taxonomy")
-(define taxonomy (make-parameter (taxonomy "ECOICOP")))
+(define-namespace ns node-namespace)
 
-(define (descendants-query ecoicop)
+(define scheme (make-parameter
+                (or (get-environment-variable "CONCEPT_SCHEME")
+                    (taxonomy "ECOICOP"))))
+
+(define (descendance-query vars scheme child parent)
   (select-triples
-   "?x"
-   (format #f (conc "?x skos:inScheme <~A>.~%"
-                     "?x skos:broader <~A>.~%")
-           (taxonomy) ecoicop)))
+   vars
+   (format #f (conc "~A skos:inScheme <~A>.~%"
+                     "~A skos:broader ~A.~%")
+           child scheme child parent)))
 
-(define (ancestors-query ecoicop)
-  (select-triples
-   "?x"
-   (format #f (conc "?x skos:inScheme <~A>.~%"
-                     "<~A> skos:broader ?x .~%")
-           (taxonomy) ecoicop)))
+(define (descendants-query node)
+  (descendance-query "?x" (scheme) "?x" node))
 
-(define (properties-query ecoicop)
+(define (ancestors-query node)
+  (descendance-query "?x" (scheme) node "?x"))
+
+;; this shouldn't be hard-coded
+;; get all properties? or...
+(define (properties-query node)
   (select-triples
    "?name, ?description"
    (format #f (conc "<~A> skos:altLabel ?name.~%"
                      "<~A> skos:prefLabel ?description.~%"
                      "FILTER (lang(?name) = 'en')~%"
                      "FILTER (lang(?description) = 'en')~%")
-           ecoicop ecoicop)))
+           node node)))
 
-(define (get-descendants ecoicop)
-  (query-with-vars (x) (descendants-query ecoicop) x))
+(define (get-descendants node)
+  (let ((n (string->symbol node)))
+    (or (get n 'descendants)
+        (put! n 'descendants
+              (query-with-vars (x) (descendants-query (conc "<" node ">")) x)))))
 
-(define (get-ancestors ecoicop)
-  (query-with-vars (x) (ancestors-query ecoicop) x))
+(define (get-ancestors node)
+  (let ((n (string->symbol node)))
+    (or (get n 'ancestors)
+        (put! n 'ancestors
+              (query-with-vars (x) (ancestors-query (conc "<" node ">")) x)))))
 
 (define (car-when l)
   (if (null? l) '() (car l)))
@@ -86,14 +99,14 @@
 (define-rest-page (($path "/hierarchies/:id/descendants"))
   (lambda ()
     (let ((levels ($ 'levels)))
-      (json->string (ecoicop-forward-tree (ecoicop ($path 'id)) 
+      (json->string (ecoicop-forward-tree (ns ($path 'id)) 
                                           (and levels (string->number levels))))))
   no-template: #t)
 
 (define-rest-page (($path "/hierarchies/:id/ancestors"))
   (lambda ()
     (let ((levels ($ 'levels)))
-      (json->string (ecoicop-reverse-tree (ecoicop ($path 'id))
+      (json->string (ecoicop-reverse-tree (ns ($path 'id))
                                           (and levels (string->number levels))))))
   no-template: #t)
 
