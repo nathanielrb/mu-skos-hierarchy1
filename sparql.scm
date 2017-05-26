@@ -73,8 +73,7 @@
 						     (Accept application/json))))
 		   `((query . ,(add-prefixes query)))
                    read-json)))
-		   ;;(lambda () (read-json (current-input-port) #f)))))
-      ;; (print result)
+      (close-connection! uri)
       (unpack-bindings result))))
 
 (define sparql-binding

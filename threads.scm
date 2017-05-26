@@ -36,7 +36,7 @@
       lst
       (drop-max (cdr lst) (- n 1))))
 
-(define (pvec-batch #!rest thunks)
+(define (pvec-batch batch-size #!rest thunks)
   (let* ((len (length thunks))
          (result (make-vector len #f))
          (remaining len)
@@ -45,7 +45,7 @@
     (let loop ((thunks thunks))
       (if (null? thunks)
           result
-          (letrec ((batch-remaining (min 10 (length thunks)))
+          (letrec ((batch-remaining (min batch-size (length thunks)))
                    (batch-done-mutex (make-mutex))
                    (children
                     (map (lambda (thunk k)
@@ -59,16 +59,11 @@
                                 (mutex-unlock! result-mutex)
                                 (when (= batch-remaining 0)
                                   (mutex-unlock! batch-done-mutex)) ))))
-                                ;(when (= remaining 0)
-                                 ; (mutex-unlock! done-mutex))))))
-                         (take-max thunks 10) (list-tabulate len values))))
-            (print (length thunks))
-            ;(mutex-lock! done-mutex #f #f)
+                         (take-max thunks batch-size) (list-tabulate len values))))
             (mutex-lock! batch-done-mutex #f #f)
             (map thread-start! children)
-;            (mutex-lock! done-mutex #f #f)
             (mutex-lock! batch-done-mutex #f #F)
-            (loop (drop-max thunks 10)))))))
+            (loop (drop-max thunks batch-size)))))))
 
 
 (define (pmap fn #!rest lists)
@@ -77,6 +72,13 @@
     (apply map
            (lambda (e) (lambda () (fn e)))
            lists))))
+
+(define (pmap-batch batch-size fn #!rest lists)
+  (vector->list
+   (apply pvec-batch batch-size
+     (apply map
+            (lambda (e) (lambda () (fn e)))
+            lists))))
 
 (define (pmap-vec fn #!rest lists)
    (apply pvec
@@ -95,3 +97,6 @@
               (lambda (_)
                 (query-with-vars (x y) "SELECT * WHERE { <http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/041220> ?p ?o } LIMIT 1" (list x y))))))
 
+(define v (lambda () 
+                (sparql/select2
+                 "SELECT * WHERE { <http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/041220> ?p ?o } LIMIT 1")))

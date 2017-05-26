@@ -93,9 +93,11 @@
       (append (node-properties node)
               (list (cons 'children
                           (list->vector
-                           (map (lambda (e) ;; or pmap ;-)
-                                  (tree next-fn e (and levels (- levels 1))))
-                                 (next-fn node))))))))
+                           (pmap-batch
+                            100
+                            (lambda (e) ;; or pmap ;-)
+                              (tree next-fn e (and levels (- levels 1))))
+                            (next-fn node))))))))
 
 (define (forward-tree node #!optional levels)
   (tree get-descendants node levels))
