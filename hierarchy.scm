@@ -7,6 +7,7 @@
 (load "sparql.scm")
 (load "rdf.scm")
 (load "rest.scm")
+(load "threads.scm")
 
 (development-mode? #t)
 (debug-file "./debug.log")
@@ -55,59 +56,65 @@
                      "FILTER (lang(?description) = 'en')~%")
            node node)))
 
+(define-syntax hit-cache
+  (syntax-rules ()
+    ((hit-property-cache sym prop body)
+     (or (get sym prop)
+         (put! sym prop body)))))
+
 (define (get-descendants node)
   (let ((n (string->symbol node)))
-    (or (get n 'descendants)
-        (put! n 'descendants
-              (query-with-vars (x) (descendants-query (conc "<" node ">")) x)))))
+    (hit-cache n 'descendants
+               (query-with-vars (x) (descendants-query (conc "<" node ">")) x))))
 
 (define (get-ancestors node)
   (let ((n (string->symbol node)))
-    (or (get n 'ancestors)
-        (put! n 'ancestors
-              (query-with-vars (x) (ancestors-query (conc "<" node ">")) x)))))
+    (hit-cache n 'ancestors
+               (query-with-vars (x) (ancestors-query (conc "<" node ">")) x))))
 
 (define (car-when l)
   (if (null? l) '() (car l)))
 
-(define (ecoicop-properties ecoicop)
-  (append (list (cons 'id ecoicop))
-          (car-when
-           (query-with-vars
-            (name description)
-            (properties-query ecoicop)
-            (list
-             (cons 'name name)
-             (cons 'description description))))))
+(define (node-properties node)
+  (let ((n (string->symbol node)))
+    (hit-cache n 'properties
+               (append (list (cons 'id node))
+                       (car-when
+                        (query-with-vars
+                         (name description)
+                         (properties-query node)
+                         (list
+                          (cons 'name name)
+                          (cons 'description description))))))))
 
-(define (ecoicop-tree next-fn ecoicop #!optional levels)
+(define (tree next-fn node #!optional levels)
   (if (eq? levels 0)
-      (ecoicop-properties ecoicop)
-      (append (ecoicop-properties ecoicop)
+      (node-properties node)
+      (append (node-properties node)
               (list (cons 'children
                           (list->vector
-                           (map (lambda (e)
-                                  (ecoicop-tree next-fn e (and levels (- levels 1))))
-                                (next-fn ecoicop))))))))
+                           (map (lambda (e) ;; or pmap ;-)
+                                  (tree next-fn e (and levels (- levels 1))))
+                                 (next-fn node))))))))
 
-(define (ecoicop-forward-tree ecoicop #!optional levels)
-  (ecoicop-tree get-descendants ecoicop levels))
+(define (forward-tree node #!optional levels)
+  (tree get-descendants node levels))
 
-(define (ecoicop-reverse-tree ecoicop #!optional levels)
-  (ecoicop-tree get-ancestors ecoicop levels))
+(define (reverse-tree node #!optional levels)
+  (tree get-ancestors node levels))
 
 (define-rest-page (($path "/hierarchies/:id/descendants"))
   (lambda ()
     (let ((levels ($ 'levels)))
-      (json->string (ecoicop-forward-tree (ns ($path 'id)) 
-                                          (and levels (string->number levels))))))
-  no-template: #t)
+      `((data .
+              ,(forward-tree
+                (ns ($path 'id)) 
+                (and levels (string->number levels))))))))
 
 (define-rest-page (($path "/hierarchies/:id/ancestors"))
   (lambda ()
     (let ((levels ($ 'levels)))
-      (json->string (ecoicop-reverse-tree (ns ($path 'id))
-                                          (and levels (string->number levels))))))
-  no-template: #t)
+      (reverse-tree (ns ($path 'id))
+                            (and levels (string->number levels))))))
 
 

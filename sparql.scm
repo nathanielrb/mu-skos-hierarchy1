@@ -72,7 +72,8 @@
 				 headers: (headers '((Content-Type application/x-www-form-urlencoded)
 						     (Accept application/json))))
 		   `((query . ,(add-prefixes query)))
-		   read-json)))
+                   read-json)))
+		   ;;(lambda () (read-json (current-input-port) #f)))))
       ;; (print result)
       (unpack-bindings result))))
 

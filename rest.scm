@@ -47,5 +47,6 @@
 			  (list-ref (irregex-split "/" path) index)
 			  default)))))
              (awful-response-headers '((content-type "application/json")))
-	     (body)))
+	     (json->string (body))))
+         no-template: #t
 	 . args)))))
