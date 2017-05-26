@@ -95,7 +95,7 @@
                           (list->vector
                            (pmap-batch
                             100
-                            (lambda (e) ;; or pmap ;-)
+                            (lambda (e)
                               (tree next-fn e (and levels (- levels 1))))
                             (next-fn node))))))))
 

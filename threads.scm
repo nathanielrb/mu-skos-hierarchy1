@@ -17,7 +17,6 @@
                           (vector-set! result k x)
                           (set! remaining (- remaining 1))
                           (mutex-unlock! result-mutex)
-                          ;;(thread-terminate! child2)
                           (when (= remaining 0)
                             (mutex-unlock! done-mutex))))))
                    thunks (list-tabulate len values))))
@@ -36,13 +35,16 @@
       lst
       (drop-max (cdr lst) (- n 1))))
 
-(define (pvec-batch batch-size #!rest thunks)
+;; Works even with big numbers
+
+(define (pvec-batch batch-size thunks)
   (let* ((len (length thunks))
          (result (make-vector len #f))
          (remaining len)
          (result-mutex (make-mutex))         
          (done-mutex (make-mutex)))
-    (let loop ((thunks thunks))
+    (let loop ((thunks thunks)
+               (batch 0))
       (if (null? thunks)
           result
           (letrec ((batch-remaining (min batch-size (length thunks)))
@@ -59,12 +61,51 @@
                                 (mutex-unlock! result-mutex)
                                 (when (= batch-remaining 0)
                                   (mutex-unlock! batch-done-mutex)) ))))
-                         (take-max thunks batch-size) (list-tabulate len values))))
+                         (take-max thunks batch-size)
+                         (list-tabulate len
+                                        (lambda (x) (+ x (* batch batch-size)))))))
             (mutex-lock! batch-done-mutex #f #f)
             (map thread-start! children)
             (mutex-lock! batch-done-mutex #f #F)
-            (loop (drop-max thunks batch-size)))))))
+            (loop (drop-max thunks batch-size) (+ batch 1)))))))
 
+(define pool (make-pool '(1 2 3 4)))
+
+;; gives abandoned-mutex-exception
+;; (define v (pvec-pool 100 (make-list 500 t)))
+;; needs some more thought
+(define (pvec-pool pool-size thunks)
+  (let* ((len (length thunks))
+         (result (make-vector len #f))
+         (remaining len)
+         (count pool-size)
+         (pool-mutex (make-mutex))
+         (result-mutex (make-mutex))
+         (done-mutex (make-mutex)))
+    (letrec ((children
+              (map (lambda (thunk k)
+                     (make-thread
+                      (lambda ()
+                        (let ((waiting (if (= count 0)
+                                           (begin (mutex-lock! pool-mutex #f #f)
+                                                  #t)
+                                           (begin (set! count (- count 1))
+                                                  #f)))
+                              (x (thunk)))
+                          (mutex-lock! result-mutex #f #f)
+                          (vector-set! result k x)
+                          (set! remaining (- remaining 1))
+                          (mutex-unlock! result-mutex)
+                          (if waiting
+                            (set! count (+ count 1))
+                            (mutex-unlock! pool-mutex))
+                          (when (= remaining 0)
+                            (mutex-unlock! done-mutex))))))
+                   thunks (list-tabulate len values))))
+      (mutex-lock! done-mutex #f #f)
+      (map thread-start! children)
+      (mutex-lock! done-mutex #f #f)
+      result)))
 
 (define (pmap fn #!rest lists)
   (vector->list
@@ -75,7 +116,14 @@
 
 (define (pmap-batch batch-size fn #!rest lists)
   (vector->list
-   (apply pvec-batch batch-size
+   (pvec-batch batch-size
+     (apply map
+            (lambda (e) (lambda () (fn e)))
+            lists))))
+
+(define (pmap-pool pool-size fn #!rest lists)
+  (vector->list
+   (pvec-pool pool-size
      (apply map
             (lambda (e) (lambda () (fn e)))
             lists))))
@@ -89,14 +137,6 @@
 (define pool (make-pool '(1 2 3 4 5)))
 
 (define t (lambda () 
-                (query-with-vars (x y) "SELECT * WHERE { <http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/041220> ?p ?o } LIMIT 1" (list x y))))
-
-
-(define u (lambda () 
-            (call-with-value-from-pool pool
-              (lambda (_)
-                (query-with-vars (x y) "SELECT * WHERE { <http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/041220> ?p ?o } LIMIT 1" (list x y))))))
-
-(define v (lambda () 
-                (sparql/select2
-                 "SELECT * WHERE { <http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/041220> ?p ?o } LIMIT 1")))
+            (query-with-vars (x y)
+                             "SELECT * WHERE { <http://data.europa.eu/eurostat/id/taxonomy/ECOICOP/concept/041220> ?p ?o } LIMIT 1"
+                             (list x y))))
