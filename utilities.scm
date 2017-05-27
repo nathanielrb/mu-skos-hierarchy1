@@ -11,3 +11,12 @@
       str
       (conc str substr)))
 
+(define (assoc-val key alist)
+  (let ((v (assoc key alist)))
+    (and v (cdr v))))
+
+(define (cdr-when p)
+  (and (pair? p) (cdr p)))
+
+(define (car-when p)
+  (and (pair? p) (car p)))

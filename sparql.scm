@@ -12,15 +12,23 @@
 
 (define *namespaces* (make-parameter '()))
 
-  (define (assoc-val key alist)
-    (let ((v (assoc key alist)))
-      (and v (cdr v))))
-
 (define (reify x)
     (cond ((string? x) (conc "\"" x "\""))
 	  ((keyword? x) (keyword->string x))
 	  ;;((list? x) (apply conc x))
-          ((symbol? x) x)))
+          ((symbol? x) (symbol->string x))
+	  ((namespace-pair? x) (expand-namespace x))))
+
+(define (read-uri uri)
+  (string->symbol (conc "<" uri ">")))
+
+(define (write-uri uri)
+  (let ((str (symbol->string uri)))
+    (substring str 1 (- (string-length str) 1))))
+
+(define (rdf->json x)
+  (cond ((symbol? x) (write-uri x))
+	(else x)))
 
 (define format-triple
   (match-lambda 
@@ -47,14 +55,26 @@
 (define (register-namespace name namespace)
   (*namespaces* (cons (list name namespace) (*namespaces*))))
 
+(define (lookup-namespace name)
+  (car-when (assoc-val name (*namespaces*))))
+
+(define (expand-namespace ns-pair)
+  (read-uri (format #f "~A~A" (lookup-namespace (car ns-pair)) (cadr ns-pair))))
+
+(define (write-expand-namespace ns-pair)
+  (format #f "~A~A" (lookup-namespace (car ns-pair)) (cadr ns-pair)))
+
+(define (namespace-pair? x)
+  (pair? x))
+
 ;; or consider a general function (expand-namespace mu 'pred)
 (define-syntax define-namespace
   (syntax-rules ()
     ((define-namespace name namespace)
      (begin
-       (register-namespace (->string (quote name)) namespace)
+       (register-namespace (quote name) namespace) ;  (->string
        (define (name elt)
-         (conc namespace ":" elt))))))
+         (read-uri (conc namespace elt)))))))
 
 (define (insert-triples triples  #!optional (graph (*default-graph*)))
   (format #f "WITH <~A>~%INSERT {~%  ~A ~%}"
@@ -65,10 +85,10 @@
   (let ((order-statement (if order-by
 			     (format #f "~%ORDER BY ~A" order-by)
 			     "")))
-    (format #f "WITH <~A>~%SELECT ~A~%WHERE {~% ~A ~%} ~A"
+    (format #f "WITH ~A~%SELECT ~A~%WHERE {~% ~A ~%} ~A"
 	    graph vars statements order-statement)))
 
-(define (expand-namespaces namespaces)
+(define (expand-namespace-prefixes namespaces)
   (apply conc
 	 (map (lambda (ns)
 		(format #f "PREFIX ~A: <~A>~%"
@@ -77,7 +97,7 @@
 
 (define (add-prefixes query)
   (format #f "~A~%~A"
-	  (expand-namespaces (*namespaces*))
+	  (expand-namespace-prefixes (*namespaces*))
 	  query))
 
 (define (sparql/update query)
@@ -108,9 +128,6 @@
                    read-json)))
       (close-connection! uri)
       (if raw? result (unpack-bindings result)))))
-
-(define (read-uri uri)
-  (string->symbol (conc "<" uri ">")))
 
 (define sparql-binding
   (match-lambda
