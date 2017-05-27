@@ -94,7 +94,7 @@
       (close-connection! uri)
       response)))
 
-(define (sparql/select query unpack?)
+(define (sparql/select query #!optional raw?)
   (let ((endpoint (*sparql-endpoint*)))
     (when (*print-queries?*)
 	  (format #t "~%Query:~%~A~%" (add-prefixes query)))
@@ -107,7 +107,7 @@
 		   `((query . ,(add-prefixes query)))
                    read-json)))
       (close-connection! uri)
-      (if unpack?       (unpack-bindings result) result))))
+      (if raw? result (unpack-bindings result)))))
 
 (define (read-uri uri)
   (string->symbol (conc "<" uri ">")))
@@ -135,11 +135,7 @@
 	   (assoc-get 'bindings
 		     (assoc-get 'results results)))))
 
-(define-syntax match-sparql-query
-  (syntax-rules ()
-    ((match-sparql (vars ...) query form)
-     (map (match-lambda ((vars ...) form))
-	  (sparql/select query)))))
+;; (define-syntax query-with-bindings
 
 (define-syntax query-with-vars
   (syntax-rules ()

@@ -5,7 +5,6 @@
 (use awful srfi-69)
 
 (load "sparql.scm")
-(load "rdf.scm")
 (load "rest.scm")
 (load "threads.scm")
 
