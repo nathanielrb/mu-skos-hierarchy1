@@ -49,7 +49,32 @@
 	(if (equal? uri (write-uri (reify (resource-class resource))))
 	    resource
 	    (get-resource-name-by-uri uri (cdr resources))))))
-  
+
+(define (resource-property resource property)
+  (assoc-val property (resource-properties resource)))
+
+(define (property-class property)
+  (car (assoc-val 'class property)))
+
+(define (property-inverse? property)
+  (car (assoc-val 'inverse? property)))
+
+(define (property-unique? property)
+  (car (assoc-val 'unique? property)))
+
+(define (resource-property-class resource property)
+  (property-class
+   (assoc-val property
+	      (resource-properties resource))))
+
+(define (resource-property-unique? resource property)
+  (property-unique?
+	     (assoc-val property (resource-properties resource))))
+
+(define (resource-property-inverse? resource property)
+  (property-inverse?
+   (assoc-val property (resource-properties resource))))
+
 (define (get-graph-query resource realm)
   (let ((graph-type (reify (resource-graph-type resource))))
     (select-triples "?graph"
@@ -59,7 +84,8 @@
 
 (define (get-property-by-predicate property-list predicate)
   (cond ((null? property-list) #f)
-	((equal? (reify (cdar property-list)) predicate) (caar property-list))
+	((equal? (reify (property-class (cdar property-list))) predicate)
+	 (caar property-list))
 	(else (get-property-by-predicate (cdr property-list) predicate))))
 	 
 
@@ -76,11 +102,43 @@
     (select-triples
      "?p, ?o"
      (string-join
-	    (map (lambda (property)
-		   (let ((pred (reify (cdr property))))
-		     (format #f "{ ~A ~A ?o . ~A ?p ?o }~%" (reify id) pred (reify id))))
+      (map (lambda (property)
+	     (print "PROP " property)
+	     (format #f "{ ~A ~A ?o . ~A ?p ?o }~%"
+		     (reify id)
+		     (reify (property-class (cdr property)))
+		     (reify id)))
 		 properties)
 	    " UNION ")
+     #:graph (reify graph))))
+
+(define (delete-properties-query realm resource id properties)
+  (let ((graph (get-resource-graph resource realm)))
+    (delete-triples
+     "?s ?p ?o"
+     #:where (conc "?s ?p ?o .\n"
+		   (string-join
+		    (map (lambda (property)
+			   (format #f "{ ~A ~A ~A } ~%"
+				   (reify id)
+				   (reify (resource-property-class resource property))
+				   (if (null? (cdr property))
+				       "?o"
+				       (reify (cdr property)))))
+			 properties)
+		    " UNION "))
+     #:graph (reify graph))))
+
+(define (insert-properties-query realm resource id properties)
+  (let ((graph (get-resource-graph resource realm)))
+    (insert-triples
+     (string-join
+      (map (lambda (property)
+	     (format #f "~A ~A ~A .~%"
+		     (reify id)
+		     (reify (resource-property-class resource (car property)))
+		     (reify (cdr property))))
+	   properties))
      #:graph (reify graph))))
 
 (define (get-links-query realm resource id link)
@@ -103,6 +161,10 @@
      (get-properties-query realm resource id)
      (cons (get-property-by-predicate properties property)
 	   (rdf->json value)))))
+
+(define (update-properties realm resource id properties)
+  (sparql/update
+    (insert-properties-query realm resource id properties)))
 
 (define (get-links realm resource id link)
   (let ((properties (resource-properties resource)))
@@ -150,20 +212,24 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Tests
 
+;; change properties format to:
+;; (gtin (class (mu "amount")) (inverse? #f) (unique? #t))
+;; then collate for non-unique properties
 (define-resource 'product `((class . (eurostat Product))
 			    (graph-type . (eurostat ProductsGraph))
 			    (base . "http://mu.semte.ch/eurostat")
 			    (base-prefix . "eurostat")
-			    (properties (gtin . (mu "gtin"))
-					(amount . (mu "amount"))
-					(description . (mu "description"))
-					(class . (mu "class")))))
+			    (properties (gtin (class (mu "gtin")))
+					(amount (class (mu "amount")))
+					(description (class (mu "description")))
+					(ecoicop (class (mu "ecoicop"))))))
+
 
 (define-resource 'class `((class . (eurostat ECOICOP))
 			  (graph . (eurostat ECOICOP))
 			  (base . "http://mu.semte.ch/eurostat")
 			  (base-prefix . "eurostat")
-			  (properties (name . (mu "name")))))
+			  (properties (name (class (mu "name"))))))
 ;; Tests
 ;;
 ;; (get-linked-objects '(eurostat AlbertHeijn) (get-resource 'product) (eurostat 'product1) 'class)

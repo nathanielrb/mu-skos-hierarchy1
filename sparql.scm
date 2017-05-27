@@ -12,6 +12,9 @@
 
 (define *namespaces* (make-parameter '()))
 
+;; to do : use this parameter in reify!
+(define *expand-namespaces?* (make-parameter #t))
+
 (define (reify x)
     (cond ((string? x) (conc "\"" x "\""))
 	  ((keyword? x) (keyword->string x))
@@ -76,10 +79,15 @@
        (define (name elt)
          (read-uri (conc namespace elt)))))))
 
-(define (insert-triples triples  #!optional (graph (*default-graph*)))
-  (format #f "WITH <~A>~%INSERT {~%  ~A ~%}"
+(define (insert-triples triples  #!key (graph (*default-graph*)))
+  (format #f "WITH ~A~%INSERT {~%  ~A ~%}"
 	  graph
 	  triples))
+
+(define (delete-triples triples  #!key (graph (*default-graph*)) (where #f))
+  (conc
+   (format #f "WITH ~A~%DELETE {~%  ~A ~%}" graph triples)
+   (if where (format #f "~%WHERE {~% ~A ~%}" where) "")))
 
 (define (select-triples vars statements #!key (graph (*default-graph*)) order-by)
   (let ((order-statement (if order-by
