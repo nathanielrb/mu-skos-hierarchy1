@@ -23,10 +23,14 @@
 
 (define-namespace eurostat "http://mu.semte.ch/eurostat/")
 
-
 (define-record resource name class base base-prefix graph graph-type properties)
 
+(define-record object resource id properties)
+
+(define *resources* (make-parameter '()))
+
 (define (define-resource name properties)
+  (*resources* (cons name (*resources*)))
   (put! name 'resource
 	(make-resource name
 		       (assoc-val 'class properties)
@@ -38,6 +42,14 @@
 
 (define (get-resource name) (get name 'resource))
 
+(define (get-resource-by-uri uri #!optional (resources (*resources*)))
+  (if (null? resources)
+      #f
+      (let ((resource (get-resource (car resources))))
+	(if (equal? uri (write-uri (reify (resource-class resource))))
+	    resource
+	    (get-resource-name-by-uri uri (cdr resources))))))
+  
 (define (get-graph-query resource realm)
   (let ((graph-type (reify (resource-graph-type resource))))
     (select-triples "?graph"
@@ -80,6 +92,10 @@
      (format #f "~A ~A ?o~%" id pred)
      #:graph graph)))
 
+(define (get-object realm resource-name id)
+  (let ((resource (get-resource resource-name)))
+    (make-object resource id (get-properties realm resource id))))
+   
 (define (get-properties realm resource id)
   (let ((properties (resource-properties resource)))
     (query-with-vars
@@ -100,7 +116,7 @@
 	 (get-properties realm (get-resource link) element))
        (get-links realm resource id link)))
 
-(define (object->json-ld resource id properties) ; resource id realm)
+(define (object->json-ld1 resource id properties) ; resource id realm)
   (let ((props (resource-properties resource)))
     `((@id . ,(write-uri (reify id)))
       (@type . ,(write-uri (reify (resource-class resource))))
@@ -108,14 +124,26 @@
       (@context ,@(map (lambda (property)
 			(cons (car property)
 			      (lookup-namespace (cadr property))))
-		      props)))))       
+		       props)))))
 
-;; todo: refactor properties/linked-properties/object->json
+;; put things in contexts?
+(define (object->json-ld object)
+  (let* ((resource (object-resource object))
+	   (props (resource-properties resource)))
+    `((@id . ,(write-uri (object-id object)))
+      (@type . ,(write-uri (reify (resource-class resource))))
+      ,@(object-properties object)
+      (@context ,@(map (lambda (property)
+			(cons (car property)
+			      (lookup-namespace (cadr property))))
+		       props)))))
 
-;; (define (json-ld->object)
+;; to do: handle @contexts
+(define (json-ld->object realm json-ld)
+  (let ((resource (get-resource-by-uri (assoc-val '@type json-ld)))
+	(id (read-uri (assoc-val '@id json-ld))))
+    (make-object resource id (get-properties realm resource id))))
 
-;; test:
-;; (json-ld->object
 ;; (define put-properties)
 
 
@@ -132,11 +160,18 @@
 					(class . (mu "class")))))
 
 (define-resource 'class `((class . (eurostat ECOICOP))
-			    (graph . (eurostat ECOICOP))
-			    (base . "http://mu.semte.ch/eurostat")
-			    (base-prefix . "eurostat")
-			    (properties (name . (mu "name")))))
-
+			  (graph . (eurostat ECOICOP))
+			  (base . "http://mu.semte.ch/eurostat")
+			  (base-prefix . "eurostat")
+			  (properties (name . (mu "name")))))
+;; Tests
+;;
 ;; (get-linked-objects '(eurostat AlbertHeijn) (get-resource 'product) (eurostat 'product1) 'class)
 ;; (get-properties  'eurostat:AlbertHeijn (get-resource 'product) (eurostat 'product1))
-;; (object->json-ld (get-resource 'product) '(eurostat product1) (get-properties 'eurostat:AlbertHeijn (get-resource 'product) (eurostat 'product1) ))
+;; (object->json-ld
+;;  (get-resource 'product) '(eurostat product1)
+;;  (get-properties 'eurostat:AlbertHeijn (get-resource 'product) (eurostat 'product1) ))
+;;
+;; (define o (get-object 'eurostat:AlbertHeijn 'product (eurostat 'product1)))
+; (json->string (object->json-ld o))
+;; (equal? o (json-ld->object '(eurostat AlbertHeijn) (object->json-ld o)))
