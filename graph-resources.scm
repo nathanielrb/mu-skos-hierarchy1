@@ -126,7 +126,6 @@
      "?p, ?o"
      (string-join
       (map (lambda (property)
-	     (print "PROP " property)
 	     (format #f "{ ~A ~A ?o . ~A ?p ?o }~%"
 		     (reify id)
 		     (reify (property-class property))
@@ -142,8 +141,6 @@
      #:where (conc "?s ?p ?o .\n"
 		   (string-join
 		    (map (lambda (property-value)
-			   (print property-value)
-			   (print (resource-property-class resource (car property-value)))
 			   (format #f "{ ~A ~A ~A } ~%"
 				   (reify id)
 				   (reify (resource-property-class
@@ -176,11 +173,15 @@
      (format #f "?s a ~A~%" (reify class))
      #:graph graph)))
 
-(define (get-links-query realm resource id link)
-  (let ((graph (get-resource-graph resource realm)))
+(define (get-links-query realm resource id link-class linked-resource #!optional inverse?)
+  (let ((graph (if inverse?
+		   (get-resource-graph linked-resource realm)
+		   (get-resource-graph resource realm))))
     (select-triples
      "?o"
-     (format #f "~A ~A ?o~%" (reify id) (reify link))
+     (if inverse?
+	 (format #f "?o ~A ~A~%" (reify link-class) (reify id))
+	 (format #f "~A ~A ?o~%" (reify id) (reify link-class)))
      #:graph graph)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -211,11 +212,11 @@
     (sparql/update
      (insert-properties-query realm resource id property-values))))
 
-(define (get-links realm resource id link)
+(define (get-links realm resource id link-class linked-resource #!optional inverse?)
   (let ((properties (resource-properties resource)))
     (query-with-vars
      (element)
-     (get-links-query realm resource id link)
+     (get-links-query realm resource id link-class linked-resource inverse?)
      element)))
 
 (define (get-items realm resource)
@@ -226,10 +227,10 @@
      element)))
 
 ;; (get-resource-by-name resource-name)))
-(define (get-linked-items realm resource id link-class linked-resource)
+(define (get-linked-items realm resource id link-class linked-resource #!optional inverse?)
   (map (lambda (element)
-	 (get-properties realm linked-resource element))
-       (get-links realm resource id link-class)))
+	 (get-item realm linked-resource element))
+       (get-links realm resource id link-class linked-resource inverse?)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; API Calls
@@ -246,14 +247,20 @@
 
 (define (links-call realm-name resource-name id-stub link)
   (let* ((realm (get-realm-by-name realm-name))
-	(resource (get-resource-by-name resource-name))
-	(id (list (resource-base-prefix resource) id-stub))
-	(link-class (resource-property-class resource link))
-	(linked-resource (get-resource (resource-property-type resource link))))
-    (get-linked-items realm resource id link-class linked-resource)))
+	 (resource (get-resource-by-name resource-name))
+	 (id (list (resource-base-prefix resource) id-stub))
+	 (link-property (resource-property resource link))
+	 (link-class (property-class link-property)) ; (resource-property-class resource link))
+	 (linked-resource (get-resource (property-type link-property)))
+	 (link-inverse? (property-inverse? link-property)))
+    ;; (linked-resource (get-resource (resource-property-type resource link))))
+    (get-linked-items realm resource id link-class linked-resource link-inverse?)))
+
 ;; (define (create-call realm-name resource-name)
 
 ;; (define (update-call realm-name resource-name id-stub)
+
+;; (define (delete-call realm-name resource-name)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Format
@@ -314,6 +321,7 @@
 			  (base-prefix . eurostat)
 			  (properties (name (class (mu "name")))
 				      (product (class (mu "class"))
+					       (type product)
 					       (inverse? #t)))))
 ;; Tests
 ;;
