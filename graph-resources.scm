@@ -26,7 +26,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Model
 
-(define-record resource name class base base-prefix graph graph-type properties)
+(define-record resource name type base base-prefix graph graph-type properties)
 
 (define-record item resource id properties)
 
@@ -44,7 +44,7 @@
   (*resources* (cons name (*resources*)))
   (put! name 'resource
 	(make-resource name
-		       (alist-ref 'class properties)
+		       (alist-ref 'predicate properties)
 		       (alist-ref 'base properties)
 		       (alist-ref 'base-prefix properties)
 		       (alist-ref 'graph properties)
@@ -57,9 +57,9 @@
   (if (null? resources)
       #f
       (let ((resource (get-resource-by-name (car resources))))
-	(if (equal? uri (write-uri (reify (resource-class resource))))
+	(if (equal? uri (write-uri (reify (resource-type resource))))
 	    resource
-	    (get-resource-name-by-uri uri (cdr resources))))))
+	    (get-resource-by-uri uri (cdr resources))))))
 
 (define (resource-property resource property)
   (assoc property (resource-properties resource)))
@@ -67,11 +67,11 @@
 (define (property-name property)
   (car property))
 
-(define (property-class property)
-  (car-when (alist-ref 'class (cdr property))))
+(define (property-resource property)
+  (car-when (alist-ref 'resource (cdr property))))
 
-(define (property-type property)
-  (car-when (alist-ref 'type (cdr property))))
+(define (property-predicate property)
+  (car-when (alist-ref 'predicate (cdr property))))
 
 (define (property-inverse? property)
   (car-when (alist-ref 'inverse?  (cdr property))))
@@ -79,12 +79,12 @@
 (define (property-multiple? property)
   (car-when (alist-ref 'multiple? (cdr property))))
 
-(define (resource-property-class resource property)
-  (property-class
+(define (resource-property-predicate resource property)
+  (property-predicate
    (assoc property (resource-properties resource))))
 
-(define (resource-property-type resource property)
-  (property-type
+(define (resource-property-resource resource property)
+  (property-resource
    (assoc property (resource-properties resource))))
 
 (define (resource-property-multiple? resource property)
@@ -104,7 +104,7 @@
 
 (define (get-property-by-predicate property-list predicate)
   (cond ((null? property-list) #f)
-	((equal? (reify (property-class (car property-list))) predicate)
+	((equal? (reify (property-predicate (car property-list))) predicate)
 	 (caar property-list))
 	(else (get-property-by-predicate (cdr property-list) predicate))))
 	 
@@ -119,7 +119,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Queries
 
-(define (get-properties-query realm resource id)
+(define (get-properties-query1 realm resource id)
   (let ((properties (resource-properties resource))
 	(graph (get-resource-graph resource realm)))
     (select-triples
@@ -128,60 +128,114 @@
       (map (lambda (property)
 	     (format #f "{ ~A ~A ?o . ~A ?p ?o }~%"
 		     (reify id)
-		     (reify (property-class property))
+		     (reify (property-predicate property))
 		     (reify id)))
 		 properties)
 	    " UNION ")
      #:graph (reify graph))))
 
-(define (delete-properties-query realm resource id property-values)
+(define (get-property-graph realm property)
+  (get-resource-graph
+   (get-resource-by-name
+    (property-resource property)) realm))
+
+(define (resource-property-graphs realm resource)
+  (let ((inverse-properties (filter property-inverse? (resource-properties resource))))
+    (map (lambda (property)
+	   (get-property-graph realm property))
+	 inverse-properties)))
+     
+(define (get-properties-query realm resource id)
+  (select-from
+   "?p, ?o"
+   (property-clauses realm resource id)
+   #:graph (reify (get-resource-graph resource realm))
+   #:named-graphs (resource-property-graphs realm resource)))
+
+(define (property-clauses realm resource id)
+  (let ((graph (get-resource-graph resource realm))
+	(properties (resource-properties resource)))
+    (string-join
+     (map (lambda (property)
+	    (if (property-inverse? property)
+		(let ((property-graph
+		       (get-resource-graph
+			(get-resource-by-name (property-resource property)) realm)))
+		  (format #f "{ ~A { ?o ~A ~A . ?o ?p ~A } }~%"
+			  (if (equal? property-graph graph) ""
+			      (format #f " GRAPH ~A " (reify property-graph)))
+			  (reify (property-predicate property))
+			  (reify id)
+			  (reify id)))
+		(format #f "{ ~A ~A ?o . ~A ?p ?o }~%"
+		    (reify id)
+		    (reify (property-predicate property))
+		    (reify id))))
+	  properties)
+     " UNION ")))
+
+(define (delete-inverse-property-query realm resource id property)
+  (let ((statement (format #f "?s ~A ~A "
+			   (reify (property-predicate property)) (reify id))))
+    (delete-from
+     statement
+     #:where statement
+     #:graph  (get-resource-graph
+	       (get-resource-by-name (property-resource property)) realm))))
+
+(define (delete-properties-query-statement realm resource id property-values #!optional full?)
+  (conc "?s ?p ?o .\n"
+	(if full? (format #f " { ~A a ?o .} UNION " (reify id)) "")
+	(string-join
+	 (map (lambda (property-value)
+		(format #f "{ ~A ~A ~A } ~%"
+			(reify id)
+			(reify (resource-property-predicate
+				resource (car property-value)))
+			(if (null? (cdr property-value))
+			    "?o"
+			    (reify (cdr property-value)))))
+	      property-values)
+	 " UNION ")))
+
+(define (delete-properties-query realm resource id property-values #!key full?)
   (let ((graph (get-resource-graph resource realm)))
     (delete-triples
      "?s ?p ?o"
-     #:where (conc "?s ?p ?o .\n"
-		   (string-join
-		    (map (lambda (property-value)
-			   (format #f "{ ~A ~A ~A } ~%"
-				   (reify id)
-				   (reify (resource-property-class
-					   resource (car property-value)))
-				   (if (null? (cdr property-value))
-				       "?o"
-				       (reify (cdr property-value)))))
-			 property-values)
-		    " UNION "))
+     #:where (delete-properties-query-statement realm resource id property-values full?)
      #:graph (reify graph))))
 
 (define (insert-properties-query realm resource id property-values)
+  (print "PROPS O"  property-values)
   (let ((graph (get-resource-graph resource realm)))
     (insert-triples
      (string-join
       (map (lambda (property-value)
 	     (format #f "~A ~A ~A .~%"
 		     (reify id)
-		     (reify (resource-property-class
+		     (reify (resource-property-predicate
 			     resource (car property-value)))
 		     (reify (cdr property-value))))
 	   property-values))
      #:graph (reify graph))))
 
 (define (get-items-query realm resource)
-  (let ((class (resource-class resource))
+  (let ((type (resource-type resource))
 	(graph (get-resource-graph resource realm)))
     (select-triples
      "?s"
-     (format #f "?s a ~A~%" (reify class))
+     (format #f "?s a ~A~%" (reify type))
      #:graph graph)))
 
-(define (get-links-query realm resource id link-class linked-resource #!optional inverse?)
+(define (get-links-query realm resource id link-type linked-resource #!optional inverse?)
   (let ((graph (if inverse?
 		   (get-resource-graph linked-resource realm)
 		   (get-resource-graph resource realm))))
     (select-triples
      "?o"
      (if inverse?
-	 (format #f "?o ~A ~A~%" (reify link-class) (reify id))
-	 (format #f "~A ~A ?o~%" (reify id) (reify link-class)))
+	 (format #f "?o ~A ~A~%" (reify link-type) (reify id))
+	 (format #f "~A ~A ?o~%" (reify id) (reify link-type)))
      #:graph graph)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -189,7 +243,19 @@
 
 (define (get-item realm resource id)
   (make-item resource id (get-properties realm resource id)))
-   
+
+(define (delete-item realm resource id)
+  (let-values (((inverse-properties properties)
+		(partition property-inverse? (resource-properties resource))))
+    (map (lambda (property)
+	   (sparql/update
+	   (delete-inverse-property-query realm resource id property)))
+	 inverse-properties)
+    (sparql/update
+     (delete-properties-query realm resource id
+			      (map list (map car properties))
+			      #:full? #t))))
+
 (define (get-properties realm resource id)
   (let ((properties (resource-properties resource)))
     (fold-alist
@@ -212,11 +278,11 @@
     (sparql/update
      (insert-properties-query realm resource id property-values))))
 
-(define (get-links realm resource id link-class linked-resource #!optional inverse?)
+(define (get-links realm resource id link-type linked-resource #!optional inverse?)
   (let ((properties (resource-properties resource)))
     (query-with-vars
      (element)
-     (get-links-query realm resource id link-class linked-resource inverse?)
+     (get-links-query realm resource id link-type linked-resource inverse?)
      element)))
 
 (define (get-items realm resource)
@@ -227,10 +293,10 @@
      element)))
 
 ;; (get-resource-by-name resource-name)))
-(define (get-linked-items realm resource id link-class linked-resource #!optional inverse?)
+(define (get-linked-items realm resource id link-type linked-resource #!optional inverse?)
   (map (lambda (element)
 	 (get-item realm linked-resource element))
-       (get-links realm resource id link-class linked-resource inverse?)))
+       (get-links realm resource id link-type linked-resource inverse?)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; API Calls
@@ -250,17 +316,32 @@
 	 (resource (get-resource-by-name resource-name))
 	 (id (list (resource-base-prefix resource) id-stub))
 	 (link-property (resource-property resource link))
-	 (link-class (property-class link-property)) ; (resource-property-class resource link))
-	 (linked-resource (get-resource (property-type link-property)))
+	 (link-type (property-predicate link-property))
+	 (linked-resource (get-resource-by-name (property-resource link-property)))
 	 (link-inverse? (property-inverse? link-property)))
-    ;; (linked-resource (get-resource (resource-property-type resource link))))
-    (get-linked-items realm resource id link-class linked-resource link-inverse?)))
+    (get-linked-items realm resource id link-type linked-resource link-inverse?)))
 
-;; (define (create-call realm-name resource-name)
+;; (define (create-call realm-name resource-name item-object)
 
-;; (define (update-call realm-name resource-name id-stub)
+(define (extract-properties resource item-object)
+  (filter values
+	  (map (lambda (prop-val)
+		 (and (resource-property resource (car prop-val)) prop-val))
+	       item-object)))
 
-;; (define (delete-call realm-name resource-name)
+(define (update-call realm-name resource-name id-stub item-object)
+  (let* ((realm (get-realm-by-name realm-name))
+	 (resource (get-resource-by-name resource-name))
+	 (id (list (resource-base-prefix resource) id-stub))
+	 (property-values (extract-properties resource item-object)))
+    (print realm "/" resource "/" id)
+    (update-properties realm resource id property-values)))
+
+(define (delete-call realm-name resource-name id-stub)
+  (let* ((realm (get-realm-by-name realm-name))
+	(resource (get-resource-by-name resource-name))
+	(id (list (resource-base-prefix resource) id-stub)))
+    (delete-item realm resource id)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Format
@@ -268,7 +349,7 @@
 (define (item->json-ld1 resource id properties) ; resource id realm)
   (let ((props (resource-properties resource)))
     `((@id . ,(write-uri (reify id)))
-      (@type . ,(write-uri (reify (resource-class resource))))
+      (@type . ,(write-uri (reify (resource-type resource))))
       ,@properties ;(get-properties resource id realm)
       (@context ,@(map (lambda (property)
 			(cons (car property)
@@ -280,7 +361,7 @@
   (let* ((resource (item-resource item))
 	   (props (resource-properties resource)))
     `((@id . ,(write-uri (item-id item)))
-      (@type . ,(write-uri (reify (resource-class resource))))
+      (@type . ,(write-uri (reify (resource-type resource))))
       ,@(item-properties item)
       (@context ,@(map (lambda (property)
 			(cons (car property)
@@ -302,26 +383,26 @@
 (define-realm 'AH 'eurostat:AlbertHeijn)
 
 ;; change properties format to:
-;; (gtin (class (mu "amount")) (inverse? #f) (unique? #t))
+;; (gtin (type (mu "amount")) (inverse? #f) (unique? #t))
 ;; then collate for non-unique properties
-(define-resource 'product `((class . (eurostat Product))
+(define-resource 'product `((type . (eurostat Product))
 			    (graph-type . (eurostat ProductsGraph))
 			    (base . "http://mu.semte.ch/eurostat")
 			    (base-prefix . eurostat)
-			    (properties (gtin (class (mu "gtin")))
-					(amount (class (mu "amount")))
-					(description (class (mu "description"))
+			    (properties (gtin (predicate(mu "gtin")))
+					(amount (predicate(mu "amount")))
+					(description (predicate(mu "description"))
 						     (multiple? #t))
-					(ecoicop (class (mu "class"))
-						 (type class)))))
+					(ecoicop (predicate(mu "class"))
+						 (resource class)))))
 
-(define-resource 'class `((class . (eurostat ECOICOP))
+(define-resource 'class `((type. (eurostat ECOICOP))
 			  (graph . (eurostat ECOICOP))
 			  (base . "http://mu.semte.ch/eurostat")
 			  (base-prefix . eurostat)
-			  (properties (name (class (mu "name")))
-				      (product (class (mu "class"))
-					       (type product)
+			  (properties (name (predicate (mu "name")))
+				      (product (predicate (mu "class"))
+					       (resource product)
 					       (inverse? #t)))))
 ;; Tests
 ;;

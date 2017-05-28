@@ -18,6 +18,7 @@
 (define (reify x)
     (cond ((string? x) (conc "\"" x "\""))
 	  ((keyword? x) (keyword->string x))
+	  ((number? x) x)
 	  ;;((list? x) (apply conc x))
           ((symbol? x) (symbol->string x))
 	  ((namespace-pair? x) (expand-namespace x))))
@@ -59,7 +60,7 @@
   (*namespaces* (cons (list name namespace) (*namespaces*))))
 
 (define (lookup-namespace name)
-  (car-when (assoc-val name (*namespaces*))))
+  (car-when (alist-ref name (*namespaces*))))
 
 (define (expand-namespace ns-pair)
   (read-uri (format #f "~A~A" (lookup-namespace (car ns-pair)) (cadr ns-pair))))
@@ -95,6 +96,31 @@
 			     "")))
     (format #f "WITH ~A~%SELECT ~A~%WHERE {~% ~A ~%} ~A"
 	    graph vars statements order-statement)))
+
+(define (select-from vars statements
+		     #!key (graph (*default-graph*)) (named-graphs '()) order-by)
+  (let ((order-statement (if order-by
+			     (format #f "~%ORDER BY ~A" order-by)
+			     "")))
+    (format #f (conc "SELECT ~A~%"
+		     "FROM ~A~%"
+		     (string-join
+		      (map (lambda (graph)
+			     (format #f "FROM NAMED ~A~%" graph))
+			   named-graphs))
+		     "WHERE {~% ~A ~%} ~A")
+	    vars graph statements order-statement)))
+
+(define (delete-from statements
+		     #!key (graph (*default-graph*)) (named-graphs '()) where)
+  (format #f (conc "DELETE { ~A }~%"
+		   "FROM ~A~%"
+		   (string-join
+		    (map (lambda (graph)
+			   (format #f "FROM NAMED ~A~%" graph))
+			 named-graphs))
+		   "WHERE {~% ~A ~%}~%")
+	  statements graph where))
 
 (define (expand-namespace-prefixes namespaces)
   (apply conc
@@ -140,14 +166,14 @@
 (define sparql-binding
   (match-lambda
     [(var (`type . "uri") . rest)
-     (cons var (read-uri (assoc-val 'value rest)))]
+     (cons var (read-uri (alist-ref 'value rest)))]
     [(var (`type . "literal") . rest)
-     (let ((lang (assoc-val 'xml:lang rest))
-	   (value (assoc-val 'value rest)))
+     (let ((lang (alist-ref 'xml:lang rest))
+	   (value (alist-ref 'value rest)))
        (cons var (if lang (conc value "@" lang) value)))]
     [(var (`type . "typed-literal") . rest)
-     (let ((datatype (assoc-val 'datatype rest))
-	   (value (assoc-val 'value rest)))
+     (let ((datatype (alist-ref 'datatype rest))
+	   (value (alist-ref 'value rest)))
        (match datatype
 	 ("http://www.w3.org/2001/XMLSchema#integer"
 	  (cons var (string->number value)))
