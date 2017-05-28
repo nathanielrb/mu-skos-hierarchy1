@@ -104,7 +104,7 @@
 (define (reverse-tree node #!optional levels)
   (tree get-ancestors node levels))
 
-(define-rest-page (($path "/hierarchies/:id/descendants"))
+(define-rest-page-fn (($path "/hierarchies/:id/descendants"))
   (lambda ()
     (let ((levels ($ 'levels)))
       `((data .
@@ -112,7 +112,7 @@
                 (ns ($path 'id)) 
                 (and levels (string->number levels))))))))
 
-(define-rest-page (($path "/hierarchies/:id/ancestors"))
+(define-rest-page-fn (($path "/hierarchies/:id/ancestors"))
   (lambda ()
     (let ((levels ($ 'levels)))
       (reverse-tree (ns ($path 'id))

@@ -5,7 +5,7 @@
 ;;   `(p ($path 'type)))
 ;;     ...)
 
-(use awful irregex srfi-13)
+(use awful medea irregex srfi-13)
 
 (define (rest-indexes parts)
   (let rec ((n 0)
@@ -32,7 +32,31 @@
       (cons (cons (car args) (cadr args))
 	    (parse-flat-args (cddr args)))))
 
+;; Even better:
+;; (define-rest-page ("/home" jim james)
+;; and concat... ??
+
 (define-syntax define-rest-page
+  (syntax-rules ()
+    ((_ ((vars ...) restexpr) body . args)
+     (let* ((pathexpr (irregex-replace/all "[:][^/]+" restexpr "[^/]+"))
+	    (rest-parts (irregex-split "/" restexpr))
+	    (indexes (rest-indexes rest-parts)))
+       (define-page (irregex pathexpr)
+	 (lambda (path)
+	   (let ((pathfun
+		  (lambda (param #!optional default)
+		    (let ((index (alist-ref param indexes)))
+		      (if index
+			  (list-ref (irregex-split "/" path) index)
+			  default)))))
+	     (let ((vars (pathfun (quote vars))) ...)
+	       (awful-response-headers '((content-type "application/json")))
+	       (json->string (body)))))
+         no-template: #t
+	 . args)))))
+
+(define-syntax define-rest-page-fn
   (syntax-rules ()
     ((_ ((pathfun restexpr)) body . args)
      (let* ((pathexpr (irregex-replace/all "[:][^/]+" restexpr "[^/]+"))

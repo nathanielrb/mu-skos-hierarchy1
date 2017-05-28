@@ -21,10 +21,16 @@
   (or (alist-ref x l) '()))
 
 (define (alist-merge-element x l)
-  (alist-update
-   (car x)
-   (cons (cdr x) (alist-ref-when (car x) l))
-   l))
+  (let ((current (alist-ref-when (car x) l)))
+    (if (null? current)
+	(cons x l)
+	(alist-update
+	 (car x)
+	 (cons (cdr x)
+	       (if (pair? current)
+		   current
+		   (list current)))
+	 l))))
 
 (define (fold-alist alst)
   (fold alist-merge-element '() alst))

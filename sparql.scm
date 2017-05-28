@@ -23,6 +23,11 @@
           ((symbol? x) (symbol->string x))
 	  ((namespace-pair? x) (expand-namespace x))))
 
+(define  (expand-uri x)
+  (if (pair? x)
+      (expand-namespace x)
+      x))
+
 (define (read-uri uri)
   (string->symbol (conc "<" uri ">")))
 

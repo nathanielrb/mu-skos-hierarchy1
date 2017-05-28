@@ -2,7 +2,7 @@
 ;; - what about those language filters??
 ;; - or get all properties??
 
-(use awful srfi-69)
+(use awful spiffy srfi-69)
 
 (load "utilities.scm")
 (load "sparql.scm")
@@ -10,7 +10,9 @@
 ;(load "threads.scm")
 
 (development-mode? #t)
+
 (debug-file "./debug.log")
+
 (*print-queries?* #t)
 
 (*default-graph* '<http://mu.semte.ch/graph-resources/>)
@@ -44,7 +46,7 @@
   (*resources* (cons name (*resources*)))
   (put! name 'resource
 	(make-resource name
-		       (alist-ref 'predicate properties)
+		       (alist-ref 'type properties)
 		       (alist-ref 'base properties)
 		       (alist-ref 'base-prefix properties)
 		       (alist-ref 'graph properties)
@@ -69,6 +71,10 @@
 
 (define (property-resource property)
   (car-when (alist-ref 'resource (cdr property))))
+
+(define (get-property-resource property)
+  (let ((res (property-resource property)))
+    (and res (get-resource-by-name res))))
 
 (define (property-predicate property)
   (car-when (alist-ref 'predicate (cdr property))))
@@ -205,8 +211,19 @@
      #:where (delete-properties-query-statement realm resource id property-values full?)
      #:graph (reify graph))))
 
+(define (insert-inverse-property-query realm resource id property-value)
+  (let ((property (resource-property resource (car property-value))))
+    (insert-triples
+     (format #f "~A ~A ~A "
+	     (reify (list (resource-base-prefix resource)
+			  (cdr property-value)))
+	     (reify (property-predicate property))
+	     (reify id))
+     #:graph  (get-resource-graph
+	       (get-resource-by-name (property-resource property)) realm))))
+
+
 (define (insert-properties-query realm resource id property-values)
-  (print "PROPS O"  property-values)
   (let ((graph (get-resource-graph resource realm)))
     (insert-triples
      (string-join
@@ -219,6 +236,14 @@
 	   property-values))
      #:graph (reify graph))))
 
+(define (create-item-query realm resource id)
+  (let ((graph (get-resource-graph resource realm)))
+    (insert-triples
+     (format #f "~A a ~A"
+	     (reify id)
+	     (reify (resource-type resource)))
+     #:graph graph)))
+	    
 (define (get-items-query realm resource)
   (let ((type (resource-type resource))
 	(graph (get-resource-graph resource realm)))
@@ -244,17 +269,21 @@
 (define (get-item realm resource id)
   (make-item resource id (get-properties realm resource id)))
 
+(define (delete-inverse-property realm resource id property)
+  (sparql/update
+   (delete-inverse-property-query realm resource id property)))
+
+(define (delete-properties realm resource id properties #!optional full?)
+    (sparql/update
+     (delete-properties-query realm resource id properties #:full? full?)))
+
 (define (delete-item realm resource id)
   (let-values (((inverse-properties properties)
 		(partition property-inverse? (resource-properties resource))))
     (map (lambda (property)
-	   (sparql/update
-	   (delete-inverse-property-query realm resource id property)))
+	   (delete-inverse-property realm resource id property))
 	 inverse-properties)
-    (sparql/update
-     (delete-properties-query realm resource id
-			      (map list (map car properties))
-			      #:full? #t))))
+    (delete-properties realm resource id (map list (map car properties)) #:full? #t)))
 
 (define (get-properties realm resource id)
   (let ((properties (resource-properties resource)))
@@ -265,7 +294,55 @@
       (cons (get-property-by-predicate properties property)
 	    (rdf->json value))))))
 
+(define (insert-inverse-property realm resource id property-value)
+  (sparql/update
+   (insert-inverse-property-query realm resource id property-value)))
+
+(define (unique-pvs pvs properties)
+  (filter
+   (lambda (pv)
+     (not
+      (property-multiple?
+       (assoc (car pv) properties))))
+   (map list (map car pvs))))
+
 (define (update-properties realm resource id property-values)
+  (let ((properties (resource-properties resource)))
+    (let-values (((inverse-property-values property-values)
+		  (partition (lambda (pv)
+			       (property-inverse?
+				(assoc (car pv) properties)))
+			     property-values)))
+      (let ((unique-properties (unique-pvs property-values properties))
+	    (unique-inverse-properties (unique-pvs inverse-property-values properties)))
+	(delete-properties realm resource id  unique-properties)
+	(map (lambda (property)
+	       (print property)
+	       (delete-inverse-property realm resource id
+					(resource-property resource (car property)))) ;; ** !!
+	     unique-inverse-properties)
+	(map (lambda (pv)
+	       (insert-inverse-property realm resource id pv))
+	     inverse-property-values)
+	(sparql/update 
+	 (insert-properties-query realm resource id property-values))))))
+
+(define (create-item realm resource id property-values)
+  (let ((properties (resource-properties resource)))
+    (let-values (((inverse-property-values property-values)
+		  (partition (lambda (pv)
+			       (property-inverse?
+				(assoc (car pv) properties)))
+			     property-values)))
+      (sparql/update
+       (create-item-query realm resource id))
+      (map (lambda (pv)
+	     (insert-inverse-property realm resource id pv))
+	   inverse-property-values)
+      (sparql/update 
+       (insert-properties-query realm resource id property-values)))))
+
+(define (update-properties1 realm resource id property-values)
   (let ((unique-property-names
 	 (filter
 	  (lambda (property-value)
@@ -273,8 +350,8 @@
 	     (property-multiple?
 	      (resource-property resource property-value))))
 	  (map car property-values))))
-    (sparql/update
-     (delete-properties-query realm resource id (map list unique-property-names)))
+     (delete-properties realm resource id  (map list unique-property-names))
+     ;;     (delete-properties-query realm resource id
     (sparql/update
      (insert-properties-query realm resource id property-values))))
 
@@ -287,10 +364,12 @@
 
 (define (get-items realm resource)
   (let ((properties (resource-properties resource)))
-    (query-with-vars
-     (element)
-     (get-items-query realm resource)
-     element)))
+    (map (lambda (item) (get-item realm resource item))
+	 (query-with-vars
+	  (element)
+	  (get-items-query realm resource)
+	  element))))
+
 
 ;; (get-resource-by-name resource-name)))
 (define (get-linked-items realm resource id link-type linked-resource #!optional inverse?)
@@ -305,11 +384,22 @@
   (get-items (get-realm-by-name realm-name)
 	     (get-resource-by-name resource-name)))
 
+(define-rest-page ((realm resource) "/resources/:realm/:resource")
+  (lambda ()
+    (list->vector
+     (map item->json-ld
+	  (list-call (string->symbol realm) (string->symbol resource))))))
+
 (define (show-call realm-name resource-name id-stub)
   (let* ((realm (get-realm-by-name realm-name))
 	(resource (get-resource-by-name resource-name))
 	(id (list (resource-base-prefix resource) id-stub)))
     (get-item realm resource id)))
+
+(define-rest-page ((realm resource id) "/resources/:realm/:resource/:id")
+  (lambda ()
+    (item->json-ld
+     (show-call (string->symbol realm) (string->symbol resource) (string->symbol id)))))
 
 (define (links-call realm-name resource-name id-stub link)
   (let* ((realm (get-realm-by-name realm-name))
@@ -321,21 +411,48 @@
 	 (link-inverse? (property-inverse? link-property)))
     (get-linked-items realm resource id link-type linked-resource link-inverse?)))
 
-;; (define (create-call realm-name resource-name item-object)
+(define-rest-page ((realm resource id link) "/resources/:realm/:resource/:id/links/:link")
+  (lambda ()
+    (list->vector
+     (map item->json-ld
+	  (links-call (string->symbol realm) (string->symbol resource)
+		      (string->symbol id) (string->symbol link))))))
 
-(define (extract-properties resource item-object)
-  (filter values
-	  (map (lambda (prop-val)
-		 (and (resource-property resource (car prop-val)) prop-val))
-	       item-object)))
+(define (create-call realm-name resource-name id-stub item-object)
+  (let* ((realm (get-realm-by-name realm-name))
+	 (resource (get-resource-by-name resource-name))
+	 (id (list (resource-base-prefix resource) id-stub))
+	 (property-values (extract-properties resource item-object)))
+    (create-item realm resource id property-values)
+    '((success . "OK"))))
 
+(define (read-request-json)
+  (let* ((headers (request-headers (current-request)))
+	 (content-length (header-value 'content-length headers))
+	 (body (read-string content-length (request-port (current-request)))))
+    (read-json body)))
+
+(define-rest-page ((realm resource id) "/resources/:realm/:resource/:id")
+  (lambda ()
+    (create-call (string->symbol realm) (string->symbol resource) (string->symbol id)
+		 (read-request-json)))
+;;  (data  (with-input-from-string ($ 'data) read-json))
+  method: 'POST)
+
+;; todo: if null/#f, delete link
 (define (update-call realm-name resource-name id-stub item-object)
   (let* ((realm (get-realm-by-name realm-name))
 	 (resource (get-resource-by-name resource-name))
 	 (id (list (resource-base-prefix resource) id-stub))
 	 (property-values (extract-properties resource item-object)))
-    (print realm "/" resource "/" id)
-    (update-properties realm resource id property-values)))
+    (update-properties realm resource id property-values)
+    '((success . "OK"))))
+
+(define-rest-page ((realm resource id) "/resources/:realm/:resource/:id")
+  (lambda ()
+    (update-call (string->symbol realm) (string->symbol resource) (string->symbol id)
+		 (read-request-json)))
+  method: 'PATCH)
 
 (define (delete-call realm-name resource-name id-stub)
   (let* ((realm (get-realm-by-name realm-name))
@@ -343,29 +460,43 @@
 	(id (list (resource-base-prefix resource) id-stub)))
     (delete-item realm resource id)))
 
+(define-rest-page ((realm resource id) "/resources/:realm/:resource/:id")
+  (lambda ()
+    (delete-call (string->symbol realm) (string->symbol resource) (string->symbol id))
+    '((success . "OK")))
+  method: 'DELETE)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Format
 
-(define (item->json-ld1 resource id properties) ; resource id realm)
-  (let ((props (resource-properties resource)))
-    `((@id . ,(write-uri (reify id)))
-      (@type . ,(write-uri (reify (resource-type resource))))
-      ,@properties ;(get-properties resource id realm)
-      (@context ,@(map (lambda (property)
-			(cons (car property)
-			      (lookup-namespace (cadr property))))
-		       props)))))
+(define (extract-properties resource item-object)
+  (filter values
+	  (map (lambda (pv)
+		 (let ((property (resource-property resource (car pv))))
+		   (if property
+		       (let ((p-resource (get-property-resource property)))
+			 (if p-resource
+			     (cons (car pv)
+				   (list (resource-base-prefix p-resource) (cdr pv)))
+			     pv))
+		       #f)))
+	       item-object)))
 
 ;; put things in contexts?
 (define (item->json-ld item)
   (let* ((resource (item-resource item))
 	   (props (resource-properties resource)))
-    `((@id . ,(write-uri (item-id item)))
-      (@type . ,(write-uri (reify (resource-type resource))))
-      ,@(item-properties item)
-      (@context ,@(map (lambda (property)
-			(cons (car property)
-			      (lookup-namespace (cadr property))))
+    `((@id . ,(write-uri (expand-uri (item-id item)))) ;; **
+      (@type . ,(write-uri (expand-uri (resource-type resource)))) ;; **
+      ,@(map (lambda (prop)
+	       (cons (car prop)
+		     (if (pair? (cdr prop))
+			 (list->vector (cdr prop))
+			 (cdr prop))))
+	     (item-properties item))
+      (@context ,@(map (lambda (prop)
+			 (cons (car prop)
+			       (write-uri (reify (property-predicate prop)))))
 		       props)))))
 
 ;; to do: handle @contexts
@@ -373,8 +504,6 @@
   (let ((resource (get-resource-by-uri (alist-ref '@type json-ld)))
 	(id (read-uri (alist-ref '@id json-ld))))
     (make-item resource id (get-properties realm resource id))))
-
-;; (define put-properties)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -389,14 +518,14 @@
 			    (graph-type . (eurostat ProductsGraph))
 			    (base . "http://mu.semte.ch/eurostat")
 			    (base-prefix . eurostat)
-			    (properties (gtin (predicate(mu "gtin")))
-					(amount (predicate(mu "amount")))
-					(description (predicate(mu "description"))
+			    (properties (gtin (predicate (mu "gtin")))
+					(amount (predicate (mu "amount")))
+					(description (predicate (mu "description"))
 						     (multiple? #t))
-					(ecoicop (predicate(mu "class"))
+					(ecoicop (predicate (mu "class"))
 						 (resource class)))))
 
-(define-resource 'class `((type. (eurostat ECOICOP))
+(define-resource 'class `((type . (eurostat ECOICOP))
 			  (graph . (eurostat ECOICOP))
 			  (base . "http://mu.semte.ch/eurostat")
 			  (base-prefix . eurostat)
