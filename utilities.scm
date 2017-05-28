@@ -11,12 +11,20 @@
       str
       (conc str substr)))
 
-(define (assoc-val key alist)
-  (let ((v (assoc key alist)))
-    (and v (cdr v))))
-
 (define (cdr-when p)
   (and (pair? p) (cdr p)))
 
 (define (car-when p)
   (and (pair? p) (car p)))
+
+(define (alist-ref-when x l)
+  (or (alist-ref x l) '()))
+
+(define (alist-merge-element x l)
+  (alist-update
+   (car x)
+   (cons (cdr x) (alist-ref-when (car x) l))
+   l))
+
+(define (fold-alist alst)
+  (fold alist-merge-element '() alst))

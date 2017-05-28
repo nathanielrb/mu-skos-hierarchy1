@@ -23,9 +23,20 @@
 
 (define-namespace eurostat "http://mu.semte.ch/eurostat/")
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Model
+
 (define-record resource name class base base-prefix graph graph-type properties)
 
-(define-record object resource id properties)
+(define-record item resource id properties)
+
+(define *realms* (make-parameter '()))
+
+(define (define-realm name value)
+  (*realms* (cons (cons name value) (*realms*))))
+
+(define (get-realm-by-name name)
+  (alist-ref name (*realms*)))
 
 (define *resources* (make-parameter '()))
 
@@ -33,47 +44,56 @@
   (*resources* (cons name (*resources*)))
   (put! name 'resource
 	(make-resource name
-		       (assoc-val 'class properties)
-		       (assoc-val 'base properties)
-		       (assoc-val 'base-prefix properties)
-		       (assoc-val 'graph properties)
-		       (assoc-val 'graph-type properties)
-		       (assoc-val 'properties properties))))
+		       (alist-ref 'class properties)
+		       (alist-ref 'base properties)
+		       (alist-ref 'base-prefix properties)
+		       (alist-ref 'graph properties)
+		       (alist-ref 'graph-type properties)
+		       (alist-ref 'properties properties))))
 
-(define (get-resource name) (get name 'resource))
+(define (get-resource-by-name name) (get name 'resource))
 
 (define (get-resource-by-uri uri #!optional (resources (*resources*)))
   (if (null? resources)
       #f
-      (let ((resource (get-resource (car resources))))
+      (let ((resource (get-resource-by-name (car resources))))
 	(if (equal? uri (write-uri (reify (resource-class resource))))
 	    resource
 	    (get-resource-name-by-uri uri (cdr resources))))))
 
 (define (resource-property resource property)
-  (assoc-val property (resource-properties resource)))
+  (assoc property (resource-properties resource)))
+
+(define (property-name property)
+  (car property))
 
 (define (property-class property)
-  (car (assoc-val 'class property)))
+  (car-when (alist-ref 'class (cdr property))))
+
+(define (property-type property)
+  (car-when (alist-ref 'type (cdr property))))
 
 (define (property-inverse? property)
-  (car (assoc-val 'inverse? property)))
+  (car-when (alist-ref 'inverse?  (cdr property))))
 
-(define (property-unique? property)
-  (car (assoc-val 'unique? property)))
+(define (property-multiple? property)
+  (car-when (alist-ref 'multiple? (cdr property))))
 
 (define (resource-property-class resource property)
   (property-class
-   (assoc-val property
-	      (resource-properties resource))))
+   (assoc property (resource-properties resource))))
 
-(define (resource-property-unique? resource property)
-  (property-unique?
-	     (assoc-val property (resource-properties resource))))
+(define (resource-property-type resource property)
+  (property-type
+   (assoc property (resource-properties resource))))
+
+(define (resource-property-multiple? resource property)
+  (property-multiple?
+   (assoc property (resource-properties resource))))
 
 (define (resource-property-inverse? resource property)
   (property-inverse?
-   (assoc-val property (resource-properties resource))))
+   (assoc property (resource-properties resource))))
 
 (define (get-graph-query resource realm)
   (let ((graph-type (reify (resource-graph-type resource))))
@@ -84,7 +104,7 @@
 
 (define (get-property-by-predicate property-list predicate)
   (cond ((null? property-list) #f)
-	((equal? (reify (property-class (cdar property-list))) predicate)
+	((equal? (reify (property-class (car property-list))) predicate)
 	 (caar property-list))
 	(else (get-property-by-predicate (cdr property-list) predicate))))
 	 
@@ -96,6 +116,9 @@
 (define (get-resource-graph-by-name name realm)
   (get-resource-graph (get name 'resource) realm))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Queries
+
 (define (get-properties-query realm resource id)
   (let ((properties (resource-properties resource))
 	(graph (get-resource-graph resource realm)))
@@ -106,79 +129,136 @@
 	     (print "PROP " property)
 	     (format #f "{ ~A ~A ?o . ~A ?p ?o }~%"
 		     (reify id)
-		     (reify (property-class (cdr property)))
+		     (reify (property-class property))
 		     (reify id)))
 		 properties)
 	    " UNION ")
      #:graph (reify graph))))
 
-(define (delete-properties-query realm resource id properties)
+(define (delete-properties-query realm resource id property-values)
   (let ((graph (get-resource-graph resource realm)))
     (delete-triples
      "?s ?p ?o"
      #:where (conc "?s ?p ?o .\n"
 		   (string-join
-		    (map (lambda (property)
+		    (map (lambda (property-value)
+			   (print property-value)
+			   (print (resource-property-class resource (car property-value)))
 			   (format #f "{ ~A ~A ~A } ~%"
 				   (reify id)
-				   (reify (resource-property-class resource property))
-				   (if (null? (cdr property))
+				   (reify (resource-property-class
+					   resource (car property-value)))
+				   (if (null? (cdr property-value))
 				       "?o"
-				       (reify (cdr property)))))
-			 properties)
+				       (reify (cdr property-value)))))
+			 property-values)
 		    " UNION "))
      #:graph (reify graph))))
 
-(define (insert-properties-query realm resource id properties)
+(define (insert-properties-query realm resource id property-values)
   (let ((graph (get-resource-graph resource realm)))
     (insert-triples
      (string-join
-      (map (lambda (property)
+      (map (lambda (property-value)
 	     (format #f "~A ~A ~A .~%"
 		     (reify id)
-		     (reify (resource-property-class resource (car property)))
-		     (reify (cdr property))))
-	   properties))
+		     (reify (resource-property-class
+			     resource (car property-value)))
+		     (reify (cdr property-value))))
+	   property-values))
      #:graph (reify graph))))
 
-(define (get-links-query realm resource id link)
-  (let ((properties (resource-properties resource))
-	(graph (get-resource-graph resource realm))
-	(pred (reify link)))
+(define (get-items-query realm resource)
+  (let ((class (resource-class resource))
+	(graph (get-resource-graph resource realm)))
     (select-triples
-     "?o"
-     (format #f "~A ~A ?o~%" id pred)
+     "?s"
+     (format #f "?s a ~A~%" (reify class))
      #:graph graph)))
 
-(define (get-object realm resource-name id)
-  (let ((resource (get-resource resource-name)))
-    (make-object resource id (get-properties realm resource id))))
+(define (get-links-query realm resource id link)
+  (let ((graph (get-resource-graph resource realm)))
+    (select-triples
+     "?o"
+     (format #f "~A ~A ?o~%" (reify id) (reify link))
+     #:graph graph)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Call Implementation
+
+(define (get-item realm resource id)
+  (make-item resource id (get-properties realm resource id)))
    
 (define (get-properties realm resource id)
   (let ((properties (resource-properties resource)))
-    (query-with-vars
-     (property value)
-     (get-properties-query realm resource id)
-     (cons (get-property-by-predicate properties property)
-	   (rdf->json value)))))
+    (fold-alist
+     (query-with-vars
+      (property value)
+      (get-properties-query realm resource id)
+      (cons (get-property-by-predicate properties property)
+	    (rdf->json value))))))
 
-(define (update-properties realm resource id properties)
-  (sparql/update
-    (insert-properties-query realm resource id properties)))
+(define (update-properties realm resource id property-values)
+  (let ((unique-property-names
+	 (filter
+	  (lambda (property-value)
+	    (not
+	     (property-multiple?
+	      (resource-property resource property-value))))
+	  (map car property-values))))
+    (sparql/update
+     (delete-properties-query realm resource id (map list unique-property-names)))
+    (sparql/update
+     (insert-properties-query realm resource id property-values))))
 
 (define (get-links realm resource id link)
   (let ((properties (resource-properties resource)))
     (query-with-vars
      (element)
-     (get-links-query realm resource id (assoc-val link properties))
+     (get-links-query realm resource id link)
      element)))
 
-(define (get-linked-object-properties realm resource id link)
-  (map (lambda (element)
-	 (get-properties realm (get-resource link) element))
-       (get-links realm resource id link)))
+(define (get-items realm resource)
+  (let ((properties (resource-properties resource)))
+    (query-with-vars
+     (element)
+     (get-items-query realm resource)
+     element)))
 
-(define (object->json-ld1 resource id properties) ; resource id realm)
+;; (get-resource-by-name resource-name)))
+(define (get-linked-items realm resource id link-class linked-resource)
+  (map (lambda (element)
+	 (get-properties realm linked-resource element))
+       (get-links realm resource id link-class)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; API Calls
+
+(define (list-call realm-name resource-name)
+  (get-items (get-realm-by-name realm-name)
+	     (get-resource-by-name resource-name)))
+
+(define (show-call realm-name resource-name id-stub)
+  (let* ((realm (get-realm-by-name realm-name))
+	(resource (get-resource-by-name resource-name))
+	(id (list (resource-base-prefix resource) id-stub)))
+    (get-item realm resource id)))
+
+(define (links-call realm-name resource-name id-stub link)
+  (let* ((realm (get-realm-by-name realm-name))
+	(resource (get-resource-by-name resource-name))
+	(id (list (resource-base-prefix resource) id-stub))
+	(link-class (resource-property-class resource link))
+	(linked-resource (get-resource (resource-property-type resource link))))
+    (get-linked-items realm resource id link-class linked-resource)))
+;; (define (create-call realm-name resource-name)
+
+;; (define (update-call realm-name resource-name id-stub)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Data Format
+
+(define (item->json-ld1 resource id properties) ; resource id realm)
   (let ((props (resource-properties resource)))
     `((@id . ,(write-uri (reify id)))
       (@type . ,(write-uri (reify (resource-class resource))))
@@ -189,22 +269,22 @@
 		       props)))))
 
 ;; put things in contexts?
-(define (object->json-ld object)
-  (let* ((resource (object-resource object))
+(define (item->json-ld item)
+  (let* ((resource (item-resource item))
 	   (props (resource-properties resource)))
-    `((@id . ,(write-uri (object-id object)))
+    `((@id . ,(write-uri (item-id item)))
       (@type . ,(write-uri (reify (resource-class resource))))
-      ,@(object-properties object)
+      ,@(item-properties item)
       (@context ,@(map (lambda (property)
 			(cons (car property)
 			      (lookup-namespace (cadr property))))
 		       props)))))
 
 ;; to do: handle @contexts
-(define (json-ld->object realm json-ld)
-  (let ((resource (get-resource-by-uri (assoc-val '@type json-ld)))
-	(id (read-uri (assoc-val '@id json-ld))))
-    (make-object resource id (get-properties realm resource id))))
+(define (json-ld->item realm json-ld)
+  (let ((resource (get-resource-by-uri (alist-ref '@type json-ld)))
+	(id (read-uri (alist-ref '@id json-ld))))
+    (make-item resource id (get-properties realm resource id))))
 
 ;; (define put-properties)
 
@@ -212,32 +292,37 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Tests
 
+(define-realm 'AH 'eurostat:AlbertHeijn)
+
 ;; change properties format to:
 ;; (gtin (class (mu "amount")) (inverse? #f) (unique? #t))
 ;; then collate for non-unique properties
 (define-resource 'product `((class . (eurostat Product))
 			    (graph-type . (eurostat ProductsGraph))
 			    (base . "http://mu.semte.ch/eurostat")
-			    (base-prefix . "eurostat")
+			    (base-prefix . eurostat)
 			    (properties (gtin (class (mu "gtin")))
 					(amount (class (mu "amount")))
-					(description (class (mu "description")))
-					(ecoicop (class (mu "ecoicop"))))))
-
+					(description (class (mu "description"))
+						     (multiple? #t))
+					(ecoicop (class (mu "class"))
+						 (type class)))))
 
 (define-resource 'class `((class . (eurostat ECOICOP))
 			  (graph . (eurostat ECOICOP))
 			  (base . "http://mu.semte.ch/eurostat")
-			  (base-prefix . "eurostat")
-			  (properties (name (class (mu "name"))))))
+			  (base-prefix . eurostat)
+			  (properties (name (class (mu "name")))
+				      (product (class (mu "class"))
+					       (inverse? #t)))))
 ;; Tests
 ;;
-;; (get-linked-objects '(eurostat AlbertHeijn) (get-resource 'product) (eurostat 'product1) 'class)
-;; (get-properties  'eurostat:AlbertHeijn (get-resource 'product) (eurostat 'product1))
-;; (object->json-ld
-;;  (get-resource 'product) '(eurostat product1)
-;;  (get-properties 'eurostat:AlbertHeijn (get-resource 'product) (eurostat 'product1) ))
+;; (get-linked-items '(eurostat AlbertHeijn) (get-resource-by-name 'product) (eurostat 'product1) 'class)
+;; (get-properties  'eurostat:AlbertHeijn (get-resource-by-name 'product) (eurostat 'product1))
+;; (item->json-ld
+;;  (get-resource-by-name 'product) '(eurostat product1)
+;;  (get-properties 'eurostat:AlbertHeijn (get-resource-by-name 'product) (eurostat 'product1) ))
 ;;
-;; (define o (get-object 'eurostat:AlbertHeijn 'product (eurostat 'product1)))
-; (json->string (object->json-ld o))
-;; (equal? o (json-ld->object '(eurostat AlbertHeijn) (object->json-ld o)))
+;; (define o (get-item 'eurostat:AlbertHeijn (get-resource 'product) (eurostat 'product1)))
+; (json->string (item->json-ld o))
+;; (equal? o (json-ld->item '(eurostat AlbertHeijn) (item->json-ld o)))
