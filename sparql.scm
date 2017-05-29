@@ -23,6 +23,35 @@
           ((symbol? x) (symbol->string x))
 	  ((namespace-pair? x) (expand-namespace x))))
 
+(define (s-triple trip)
+  (match-let (((a b c) trip))
+    (format #f "~A ~A ~A."
+            (reify a)
+            (reify b)
+            (reify c))))
+
+(define (triple a b c)
+  (s-triple (list a b c)))
+
+(define (bracketed statement)
+  (format #f "{~A}" statement))         
+
+(define (graph-statement graph statements)
+  (if graph
+      (format #f "{ GRAPH ~A { ~A } }"
+              (reify graph)
+              statements)
+      (format #f "{ ~A }" statements)))
+
+(define (union statements)
+  (string-join statements " UNION "))
+
+(define (triples trips)
+  (string-join trips "\n"))
+
+(define (s-triples trips)
+  (string-join (map s-triple trips) "\n"))
+
 (define  (expand-uri x)
   (if (pair? x)
       (expand-namespace x)

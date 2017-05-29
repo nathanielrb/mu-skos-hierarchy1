@@ -17,6 +17,9 @@
 (define (car-when p)
   (and (pair? p) (car p)))
 
+(define (cons-when x p)
+  (if x (cons x p) p))
+
 (define (alist-ref-when x l)
   (or (alist-ref x l) '()))
 
